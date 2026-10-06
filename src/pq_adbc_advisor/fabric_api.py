@@ -16,6 +16,7 @@ import random
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
+from urllib.parse import quote, urlencode
 
 import requests
 
@@ -162,15 +163,28 @@ def current_workspace_id() -> str:
 # Fabric items API - list items and fetch definitions in a single workspace
 # --------------------------------------------------------------------------- #
 
-def list_items(workspace_id: str, access_token: str, item_type: str | None = None) -> list[dict[str, Any]]:
+def list_items(
+    workspace_id: str,
+    access_token: str,
+    item_type: str | None = None,
+    method: str = "admin",
+) -> list[dict[str, Any]]:
     """Return every item in a workspace (semantic models, dataflows, pipelines...).
 
     Handles both continuationUri (older) and continuationToken (newer) paging.
     """
     items: list[dict[str, Any]] = []
-    base_url = f"{_FABRIC_API}/workspaces/{workspace_id}/items"
-    if item_type:
-        base_url += f"?type={item_type}"
+    if method == "admin":
+        params = {"workspaceId": workspace_id}
+        if item_type:
+            params["type"] = item_type
+        base_url = f"{_FABRIC_API}/admin/items?{urlencode(params)}"
+        items_key = "itemEntities"
+    else:
+        base_url = f"{_FABRIC_API}/workspaces/{quote(workspace_id, safe='')}/items"
+        items_key = "value"
+        if item_type:
+            base_url += f"?{urlencode({'type': item_type})}"
     url = base_url
     while url:
         r = _request_with_retry("GET", url, headers=_auth_headers(access_token))
@@ -178,7 +192,7 @@ def list_items(workspace_id: str, access_token: str, item_type: str | None = Non
             break
         r.raise_for_status()
         body = r.json()
-        items.extend(body.get("value", []))
+        items.extend(body.get(items_key, []))
         # Fabric APIs use one of these for paging:
         next_url = body.get("continuationUri")
         if not next_url:
@@ -186,7 +200,7 @@ def list_items(workspace_id: str, access_token: str, item_type: str | None = Non
             if token:
                 # Preserve query params (e.g. ?type=SemanticModel) when we go to the next page.
                 sep = "&" if "?" in base_url else "?"
-                next_url = f"{base_url}{sep}continuationToken={token}"
+                next_url = f"{base_url}{sep}{urlencode({'continuationToken': token})}"
         url = next_url
     return items
 

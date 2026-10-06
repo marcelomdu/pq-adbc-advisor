@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import types
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -82,6 +83,29 @@ def test_retry_wrapper_passes_through_non_retryable(monkeypatch):
     assert r is not None and r.status_code == 400
     # 400 must NOT trigger a retry.
     assert call_count[0] == 1
+
+
+def test_list_items_applies_admin_type_filter_across_pages(monkeypatch):
+    urls = []
+    pages = [
+        _Resp(200, body={"itemEntities": [{"id": "one"}], "continuationToken": "next +/="}),
+        _Resp(200, body={"itemEntities": [{"id": "two"}]}),
+    ]
+
+    def _request(method, url, **kwargs):
+        urls.append(url)
+        return pages.pop(0)
+
+    monkeypatch.setattr(fabric_api.requests, "request", _request)
+
+    items = fabric_api.list_items("workspace-id", "token", item_type="Semantic Model")
+
+    assert [item["id"] for item in items] == ["one", "two"]
+    first_query = parse_qs(urlparse(urls[0]).query)
+    second_query = parse_qs(urlparse(urls[1]).query)
+    assert first_query["type"] == ["Semantic Model"]
+    assert second_query["type"] == ["Semantic Model"]
+    assert second_query["continuationToken"] == ["next +/="]
 
 
 def test_retry_wrapper_recovers_from_network_error(monkeypatch):
