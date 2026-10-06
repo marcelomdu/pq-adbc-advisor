@@ -108,6 +108,102 @@ def test_list_items_applies_admin_type_filter_across_pages(monkeypatch):
     assert second_query["continuationToken"] == ["next +/="]
 
 
+def test_admin_list_items_identifies_gen1_dataflows_on_seventh_page(monkeypatch):
+    urls = []
+    pages = []
+    page_types = [
+        "Dataflow",  # Gen2 dataflow in the Fabric items page
+        "Datamart",
+        "Report",
+        "Dashboard",
+        "SemanticModel",
+        "App",
+        "Dataflow",  # Gen1 dataflows in the seventh page
+    ]
+    for page, item_type in enumerate(page_types):
+        body = {"itemEntities": [{"id": str(page), "type": item_type}]}
+        if page < len(page_types) - 1:
+            body["continuationToken"] = f"next {page}/+"
+        pages.append(_Resp(200, body=body))
+
+    def _request(method, url, **kwargs):
+        urls.append(url)
+        return pages.pop(0)
+
+    monkeypatch.setattr(fabric_api.requests, "request", _request)
+
+    items = fabric_api.admin_list_items("workspace-id", "token")
+
+    assert [item["id"] for item in items] == [str(page) for page in range(7)]
+    assert [item["type"] for item in items] == [
+        "Dataflow",
+        "Datamart",
+        "Report",
+        "Dashboard",
+        "SemanticModel",
+        "App",
+        "DataflowGen1",
+    ]
+    first_query = parse_qs(urlparse(urls[0]).query)
+    second_query = parse_qs(urlparse(urls[1]).query)
+    assert first_query["workspaceId"] == ["workspace-id"]
+    assert second_query["continuationToken"] == ["next 0/+"]
+
+
+def test_admin_list_items_tracks_groups_across_subpages(monkeypatch):
+    urls = []
+    responses = [
+        ({"id": "fabric-item", "type": "Dataflow"}, "next-group-2"),
+        ({"id": "datamart", "type": "Datamart"}, "next-group-3"),
+        ({"id": "report", "type": "Report"}, "next-group-4"),
+        ({"id": "dashboard-1", "type": "Dashboard"}, "AbCdE%xy"),
+        ({"id": "dashboard-2", "type": "Dashboard"}, "next-group-5"),
+        ({"id": "semantic-model", "type": "SemanticModel"}, "next-group-6"),
+        ({"id": "app", "type": "App"}, "next-group-7"),
+        ({"id": "dataflow-1", "type": "Dataflow"}, "Gen1%subpage"),
+        ({"id": "dataflow-2", "type": "Dataflow"}, None),
+    ]
+    pages = [
+        _Resp(
+            200,
+            body={
+                "itemEntities": [entity],
+                **({"continuationToken": token} if token else {}),
+            },
+        )
+        for entity, token in responses
+    ]
+
+    def _request(method, url, **kwargs):
+        urls.append(url)
+        return pages.pop(0)
+
+    monkeypatch.setattr(fabric_api.requests, "request", _request)
+
+    items = fabric_api.admin_list_items("workspace-id", "token")
+
+    assert [item["type"] for item in items] == [
+        "Dataflow",
+        "Datamart",
+        "Report",
+        "Dashboard",
+        "Dashboard",
+        "SemanticModel",
+        "App",
+        "DataflowGen1",
+        "DataflowGen1",
+    ]
+    assert parse_qs(urlparse(urls[4]).query)["continuationToken"] == ["AbCdE%xy"]
+    assert parse_qs(urlparse(urls[8]).query)["continuationToken"] == ["Gen1%subpage"]
+
+
+def test_admin_list_items_raises_after_request_retries_fail(monkeypatch):
+    monkeypatch.setattr(fabric_api, "_request_with_retry", lambda *args, **kwargs: None)
+
+    with pytest.raises(fabric_api.requests.RequestException, match="failed after retries"):
+        fabric_api.admin_list_items("workspace-id", "token")
+
+
 def test_retry_wrapper_recovers_from_network_error(monkeypatch):
     monkeypatch.setattr("time.sleep", lambda s: None)
     import requests

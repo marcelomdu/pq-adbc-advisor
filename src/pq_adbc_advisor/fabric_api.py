@@ -166,25 +166,16 @@ def current_workspace_id() -> str:
 def list_items(
     workspace_id: str,
     access_token: str,
-    item_type: str | None = None,
-    method: str = "admin",
+    item_type: str | None = None
 ) -> list[dict[str, Any]]:
     """Return every item in a workspace (semantic models, dataflows, pipelines...).
 
     Handles both continuationUri (older) and continuationToken (newer) paging.
     """
     items: list[dict[str, Any]] = []
-    if method == "admin":
-        params = {"workspaceId": workspace_id}
-        if item_type:
-            params["type"] = item_type
-        base_url = f"{_FABRIC_API}/admin/items?{urlencode(params)}"
-        items_key = "itemEntities"
-    else:
-        base_url = f"{_FABRIC_API}/workspaces/{quote(workspace_id, safe='')}/items"
-        items_key = "value"
-        if item_type:
-            base_url += f"?{urlencode({'type': item_type})}"
+    base_url = f"{_FABRIC_API}/workspaces/{workspace_id}/items"
+    if item_type:
+        base_url += f"?type={item_type}"
     url = base_url
     while url:
         r = _request_with_retry("GET", url, headers=_auth_headers(access_token))
@@ -192,7 +183,7 @@ def list_items(
             break
         r.raise_for_status()
         body = r.json()
-        items.extend(body.get(items_key, []))
+        items.extend(body.get("value", []))
         # Fabric APIs use one of these for paging:
         next_url = body.get("continuationUri")
         if not next_url:
@@ -200,8 +191,47 @@ def list_items(
             if token:
                 # Preserve query params (e.g. ?type=SemanticModel) when we go to the next page.
                 sep = "&" if "?" in base_url else "?"
-                next_url = f"{base_url}{sep}{urlencode({'continuationToken': token})}"
+                next_url = f"{base_url}{sep}continuationToken={token}"
         url = next_url
+    return items
+
+def admin_list_items(
+    workspace_id: str,
+    access_token: str,
+) -> list[dict[str, Any]]:
+    """Return admin item entities, identifying Gen1 dataflows in group seven.
+
+    Continuation tokens containing ``%`` indicate another subpage in the same
+    item group; tokens without it start the next group.
+    """
+    items: list[dict[str, Any]] = []
+    params = {"workspaceId": workspace_id}
+    group_number = 1
+
+    while True:
+        url = f"{_FABRIC_API}/admin/items?{urlencode(params)}"
+        response = _request_with_retry("GET", url, headers=_auth_headers(access_token))
+        if response is None:
+            raise requests.RequestException(
+                "Fabric Admin List Items request failed after retries."
+            )
+
+        response.raise_for_status()
+        body = response.json()
+        entities = body.get("itemEntities", [])
+        if group_number == 7:
+            for entity in entities:
+                if entity.get("type") == "Dataflow":
+                    entity["type"] = "DataflowGen1"
+        items.extend(entities)
+
+        continuation_token = body.get("continuationToken")
+        if not continuation_token:
+            break
+        if "%" not in continuation_token:
+            group_number += 1
+        params["continuationToken"] = continuation_token
+
     return items
 
 
