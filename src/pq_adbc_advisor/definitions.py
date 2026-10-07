@@ -37,6 +37,8 @@ def extract_m_expressions(definition: dict, item_type: str) -> list[dict]:
     ``definition`` is the getDefinition response body; ``item_type`` is
     the Fabric item's type field (SemanticModel, Dataflow, etc.).
     """
+    if item_type in ("DataflowGen1"):
+        return [definition.get("pbi:mashup", {}).get("document", "")]
     if not definition or "definition" not in definition:
         return []
     parts = definition["definition"].get("parts", [])
@@ -228,26 +230,9 @@ def expressions_from_scanner_dataset(dataset: dict) -> Iterable[dict]:
         yield {"name": f"shared:{expr.get('name','?')}", "expression": expr.get("expression", "")}
 
 
-def expressions_from_scanner_dataflow(dataflow: dict) -> Iterable[dict]:
-    """Extract M expressions from a Scanner API dataflow record.
-
-    Scanner API dataflow shapes vary by version. We look for common
-    variants:
-      * ``queries[*].mCode`` / ``queries[*].expression``
-      * ``entities[*].partitions[*].expression``
-      * top-level ``document`` field with a decodable mashup
-    """
-    for q in dataflow.get("queries", []) or []:
-        for key in ("mCode", "expression", "m", "M"):
-            v = q.get(key) if isinstance(q, dict) else None
-            if isinstance(v, str) and v:
-                yield {"name": q.get("name", "?"), "expression": v}
-                break
-    for e in dataflow.get("entities", []) or []:
-        for p in (e.get("partitions", []) if isinstance(e, dict) else []) or []:
-            expr = p.get("expression") if isinstance(p, dict) else None
-            if isinstance(expr, str) and expr:
-                yield {"name": e.get("name", "?"), "expression": expr}
-    doc = dataflow.get("document")
-    if isinstance(doc, str) and _looks_like_m(doc):
-        yield {"name": "document", "expression": doc}
+def expressions_from_scanner_dataflow(dataflow: dict, item_type: str) -> Iterable[dict]:
+    """Wraps the generic M expression extraction for scanner dataflow payloads."""
+    expressions = extract_m_expressions(dataflow, item_type)
+    for e in expressions:
+        if isinstance(e, str) and _looks_like_m(e):
+            yield {"name": "document", "expression": e}

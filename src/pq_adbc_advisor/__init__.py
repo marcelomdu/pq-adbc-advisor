@@ -19,7 +19,7 @@ Typical customer usage (inside a Fabric notebook)::
     result.summary()
     result.to_html("adbc_validation.html")
 """
-
+from . import fabric_api
 from .constants import IMPACTED_CONNECTORS, TOOL_VERSION
 from .discovery import scan_tenant, scan_workspace
 from .mcode import ConnectorCall, find_all_connectors, find_hits
@@ -37,6 +37,7 @@ from .validation import validate_migration
 
 __version__ = TOOL_VERSION
 __all__ = [
+    "fabric_api",
     "scan_workspace",
     "scan_tenant",
     "validate_migration",

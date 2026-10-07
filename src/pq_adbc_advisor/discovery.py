@@ -36,7 +36,7 @@ from .report import ImpactReport, ImpactedArtifact
 # Item types we currently know how to inspect.
 # SemanticModel / Dataset / Dataflow -> M expression scan.
 # DataPipeline -> connection reference scan (no M code).
-_INSPECTABLE_TYPES = {"SemanticModel", "Dataset", "Dataflow", "DataPipeline"}
+_INSPECTABLE_TYPES = {"SemanticModel", "Dataset", "DataflowGen1", "Dataflow", "DataPipeline"}
 
 # Item types the user is likely to have but that we do NOT yet parse
 # for connector calls. Surfaced as "not inspected" in the report so
@@ -82,7 +82,7 @@ def _fetch_definition_and_scan(
     """
     item_type = item.get("type", "")
     item_id = item.get("id", "")
-    item_name = item.get("displayName", "")
+    item_name = item.get("displayName", item.get("name", ""))
 
     if item_type not in _INSPECTABLE_TYPES:
         return {
@@ -182,6 +182,7 @@ def scan_workspace(
     access_token: str | None = None,
     include_fabric_connections: bool = True,
     include_non_migrating: bool = False,
+    include_gen1_dataflows: bool = False,
     max_parallel: int = DEFAULT_MAX_PARALLEL,
     telemetry_enabled: bool = True,
     verbose: bool = True,
@@ -224,7 +225,10 @@ def scan_workspace(
     report.used_sempy_path = use_sempy
 
     _log_progress(f"listing items in workspace {workspace_id}...", verbose)
-    items = fabric_api.list_items(workspace_id, access_token)
+    if include_gen1_dataflows:
+        items = fabric_api.admin_list_items(workspace_id, access_token)
+    else:
+        items = fabric_api.list_items(workspace_id, access_token)
     _log_progress(
         f"found {len(items)} items; scanning definitions in parallel "
         f"(max_parallel={max_parallel}, sempy={'on' if use_sempy else 'off'})...",
@@ -304,7 +308,7 @@ def scan_workspace(
     for res in scan_results:
         item = res["item"]
         item_id = item.get("id", "")
-        item_name = item.get("displayName", "")
+        item_name = item.get("displayName", item.get("name", ""))
         item_type = item.get("type", "")
 
         if res["skip_reason"] is not None:
@@ -374,7 +378,7 @@ def scan_workspace(
                     ImpactedArtifact(
                         workspace_id=workspace_id,
                         item_id=item.get("id", ""),
-                        item_name=item.get("displayName", ""),
+                        item_name=item.get("displayName", item.get("name", "")),
                         item_type=item.get("type", ""),
                         has_gateway=has_gateway, hits=calls,
                     )
@@ -438,9 +442,10 @@ def scan_tenant(
                     item_type="SemanticModel", has_gateway=None, hits=calls,
                 )
             )
-        for df in ws.get("dataflows", []):
+        for gen1_df in ws.get("dataflows", []):
+            df_info = fabric_api.get_item_definition(workspace_id=ws_id, item_id=gen1_df.get("objectId"), access_token=access_token, item_type="DataflowGen1")
             calls = []
-            for e in definitions.expressions_from_scanner_dataflow(df):
+            for e in definitions.expressions_from_scanner_dataflow(df_info, item_type="DataflowGen1"):
                 calls.extend(find_all_connectors(e["expression"]))
             if not calls:
                 continue
@@ -451,9 +456,28 @@ def scan_tenant(
             report.add(
                 ImpactedArtifact(
                     workspace_id=ws_id, workspace_name=ws_name,
-                    item_id=df.get("objectId", df.get("id", "")),
-                    item_name=df.get("name", ""),
-                    item_type="Dataflow", has_gateway=None, hits=calls,
+                    item_id=gen1_df.get("objectId",""),
+                    item_name=gen1_df.get("name", ""),
+                    item_type="DataflowGen1", has_gateway=None, hits=calls,
+                )
+            )
+        for gen2_df in ws.get("Dataflow", []):
+            df_info = fabric_api.get_item_definition(workspace_id=ws_id, item_id=gen2_df.get("id"), access_token=access_token, item_type="Dataflow")
+            calls = []
+            for e in definitions.expressions_from_scanner_dataflow(df_info, item_type="Dataflow"):
+                calls.extend(find_all_connectors(e["expression"]))
+            if not calls:
+                continue
+            if not include_non_migrating:
+                calls = [c for c in calls if c.is_migrating or c.custom_dsn]
+                if not calls:
+                    continue
+            report.add(
+                ImpactedArtifact(
+                    workspace_id=ws_id, workspace_name=ws_name,
+                    item_id=gen2_df.get("id",""),
+                    item_name=gen2_df.get("name", ""),
+                    item_type="DataflowGen2", has_gateway=None, hits=calls,
                 )
             )
 

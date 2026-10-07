@@ -250,11 +250,16 @@ def get_item_definition(
     more reliable than the TMDL heuristic.  For other item types we let
     the API pick the default format.
     """
-    url = f"{_FABRIC_API}/workspaces/{workspace_id}/items/{item_id}/getDefinition"
-    if item_type in ("SemanticModel", "Dataset"):
-        url += "?format=TMSL"
+    if item_type in ("DataflowGen1"):
+        url = f"{_PBI_API}/groups/{workspace_id}/dataflows/{item_id}"
+        request_method = "GET"
+    else:
+        url = f"{_FABRIC_API}/workspaces/{workspace_id}/items/{item_id}/getDefinition"
+        request_method = "POST"
+        if item_type in ("SemanticModel", "Dataset"):
+            url += "?format=TMSL"
 
-    r = _request_with_retry("POST", url, headers=_auth_headers(access_token))
+    r = _request_with_retry(request_method, url, headers=_auth_headers(access_token))
     if r is None:
         return None
     if r.status_code == 400:
